@@ -18,6 +18,7 @@ import type {
 } from './types';
 import { seedDrafts, seedRepoFiles, seedRepos } from './data/seed';
 import { deriveTitle } from './lib/markdown';
+import { edgeFromTint } from './lib/tint';
 
 const STORAGE_KEY = 'mumbai.notes.v1';
 
@@ -32,14 +33,18 @@ interface PersistedState {
 }
 
 function defaultState(): PersistedState {
+  const pageTint = 'hsl(30, 25%, 88.5%)';
   return {
     drafts: seedDrafts,
     repos: seedRepos,
     repoFiles: seedRepoFiles,
     selectedDocId: seedDrafts[0]?.id ?? null,
     expanded: { unattached: true, 'mochi-emr': true, 'folder:mochi-emr:core-docs/': true },
-    pageTint: 'hsl(30, 25%, 88.5%)',
-    pageTintEdge: 'hsla(30, 30%, 50%, 0.10)',
+    pageTint,
+    // Derived from pageTint so the two never drift (FB-0027).
+    // Byte-equivalent to the prior hardcoded default for the Sand hue;
+    // verified by the `edgeFromTint` test in `src/lib/tint.test.ts`.
+    pageTintEdge: edgeFromTint(pageTint),
   };
 }
 
@@ -60,6 +65,11 @@ function loadState(): PersistedState {
         ? { ...draft, wasEverEdited: true }
         : (draft as Draft);
     });
+    // Re-derive pageTintEdge from the persisted pageTint, since pre-this-PR
+    // sessions could have stored a non-Sand pageTint alongside the hardcoded
+    // warm-orange edge. Without this, returning users see the stale edge
+    // until their next tint change.
+    merged.pageTintEdge = edgeFromTint(merged.pageTint);
     return merged;
   } catch {
     return defaultState();
@@ -286,7 +296,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setState((s) => ({
       ...s,
       pageTint: tint,
-      pageTintEdge: edge ?? s.pageTintEdge,
+      // When no explicit edge is passed, derive it from the new tint so the
+      // edge always matches the active hue (preset clicks + manual hex inputs
+      // used to leak the prior stale edge here).
+      pageTintEdge: edge ?? edgeFromTint(tint),
     }));
   }, []);
 
