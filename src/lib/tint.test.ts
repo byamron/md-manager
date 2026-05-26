@@ -17,6 +17,13 @@ describe('hueFromTint', () => {
   it('returns null for named colors', () => {
     expect(hueFromTint('rebeccapurple')).toBeNull();
   });
+
+  // Contract: parser requires comma-syntax HSL. No current caller produces
+  // CSS Color Module Level 4 space-syntax (`hsl(30 25% 88%)`); pinning the
+  // rejection here so a future migration explicitly opts in.
+  it('returns null for space-syntax HSL (CSS Color Module Level 4)', () => {
+    expect(hueFromTint('hsl(30 25% 88%)')).toBeNull();
+  });
 });
 
 describe('edgeForHue', () => {

@@ -29,6 +29,11 @@ interface PersistedState {
   selectedDocId: DocId | null;
   expanded: Record<string, boolean>;
   pageTint: string;
+  /**
+   * Derived from `pageTint` via `edgeFromTint()` at every write site
+   * (`defaultState`, `loadState`, `setPageTint`). Persisted alongside `pageTint`
+   * for back-compat with stored sessions; do not update independently.
+   */
   pageTintEdge: string;
 }
 
@@ -65,10 +70,9 @@ function loadState(): PersistedState {
         ? { ...draft, wasEverEdited: true }
         : (draft as Draft);
     });
-    // Re-derive pageTintEdge from the persisted pageTint, since pre-this-PR
-    // sessions could have stored a non-Sand pageTint alongside the hardcoded
-    // warm-orange edge. Without this, returning users see the stale edge
-    // until their next tint change.
+    // Re-derive pageTintEdge from the persisted pageTint to repair stale
+    // stored values where a non-Sand tint coexists with the legacy warm-orange
+    // edge — would otherwise persist until the user's next tint change.
     merged.pageTintEdge = edgeFromTint(merged.pageTint);
     return merged;
   } catch {
