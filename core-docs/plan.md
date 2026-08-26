@@ -42,6 +42,77 @@ The living document for what's being worked on right now, what's queued, and wha
 
 ## Active Work Items
 
+### PR 5 — Per-tint edge color (flow plugin dogfood, current)
+
+**Mode:** feature
+
+**Goal:** Make the page-edge wash (`--page-tint-edge`, consumed by 5 surface borders in `globals.css`) follow the user's selected page tint instead of staying at the hardcoded warm-orange (`hsla(30, 30%, 50%, 0.10)`). Today, picking the Mist preset (hue 200) flips the page tint to blue but leaves the edge warm-orange — a visible tint-coherence break. This PR is also the **first md-manager product change shipped using only `/flow:*` skills + bundled Claude Code natives**, validating the plugin end-to-end against a real (non-contrived) diff per the PR 4–6 spec § PR 5.
+
+**Scope (in):**
+- New `src/lib/tint.ts` exporting:
+  - `hueFromTint(tint: string): number | null` — parse hue from an `hsl(...)` color string; null on non-HSL input (defensive against future inputs like named colors, hex without preceding parse).
+  - `edgeForHue(hue: number): string` — return the edge HSLA string for a hue. Matches the existing `ColorRail.tsx:50` formula (`hsla(${hue}, 30%, 50%, 0.10)`) so behavior is byte-equivalent when the input hue matches.
+  - `edgeFromTint(tint: string): string` — convenience: `edgeForHue(hueFromTint(tint))`. Falls back to the current hardcoded edge if `hueFromTint` returns null, preserving today's behavior for unrecognized inputs.
+- `src/lib/tint.test.ts` — unit tests pinning each helper's contract (HSL parse, hue extraction, edge string format, fallback path).
+- `src/store.tsx`:
+  - `defaultState()` derives the initial `pageTintEdge` from the default `pageTint` via `edgeFromTint()` (drops the redundant hardcoded value; if the defaults ever drift, derivation prevents the FB-0027 class of bug).
+  - `loadState()` re-derives `pageTintEdge` from the persisted `pageTint` after the `{ ...base, ...parsed }` merge. Ensures returning users whose stored `pageTintEdge` is stale relative to their stored `pageTint` (because they picked a non-Sand preset on a pre-this-PR session) see a correct edge on next page load, not just on next tint-change. 1 LOC; folded into scope per plan-critic to eliminate Assumption A's deferred-migration ambiguity.
+  - `setPageTint(tint, edge?)` auto-derives the edge from `tint` when `edge` is not passed. The three current callers that don't pass an edge (preset clicks at `ColorRail.tsx:155, :166`; hypothetical future callers) get correct per-tint edges automatically.
+- `src/components/ColorRail.tsx`: replace the local `edgeFor(y)` function with the shared `edgeForHue(hueAt(y))`. Net: the local helper goes away, callers use the canonical helper.
+
+**Scope (out):**
+- The default `pageTintEdge` value formula itself (lightness, saturation, alpha — `30% 50% 0.10`). This PR derives the edge from the tint's hue; tuning the perceived edge weight per hue is a separate `roadmap.md § Exploration / Color rail` direction.
+- Any other surface that consumes `--page-tint-edge` (5 sites in `globals.css` — sidebar border, sidebar handle, editor footer, panel left-borders). Out of scope; this PR only changes the value, not its consumers.
+- Dark-mode hook. Per-tint edge is a prerequisite for dark-mode's per-hue derivation; out of this PR.
+- Local `/staff-review`, `/security-review`, `/accessibility-review`, `/ship`, `/critique-plan` invocations. **All review work uses the `/flow:*` plugin namespace.** Per the spec § "Scope (out)": "No invocation of md-manager's local workflow skills."
+
+**Spec-walk checkboxes** (each maps to a verification):
+- [ ] `src/lib/tint.ts` exists and exports the 3 functions. Verified by `tsc --noEmit` clean.
+- [ ] `src/lib/tint.test.ts` exists, runs under `vitest`, covers: (a) `hueFromTint('hsl(30, 25%, 88.5%)') === 30`, (b) `hueFromTint('#abcdef') === null`, (c) `edgeForHue(30)` matches today's literal `'hsla(30, 30%, 50%, 0.10)'`, (d) `edgeFromTint(default)` matches the current default `pageTintEdge` value exactly (byte-equivalence guard against FB-0027 drift).
+- [ ] `npm run test` shows 25+ tests passing (was 21; +4 from tint.test.ts minimum).
+- [ ] `defaultState().pageTintEdge` matches the current literal `'hsla(30, 30%, 50%, 0.10)'` byte-for-byte (regression guard; new derivation must produce the same default for the Sand hue-30 case).
+- [ ] `loadState()` re-derives `pageTintEdge` from persisted `pageTint` post-merge. Verified by unit test: load state with mismatched `{pageTint: 'hsl(200, 25%, 88%)', pageTintEdge: 'hsla(30, ..., 0.10)'}` returns `pageTintEdge` matching the hue-200 derivation, not the stored hue-30 value.
+- [ ] Manual smoke: pick the Mist preset in dev; observe the page-edge wash hue shifts from warm-orange to cool-blue (visible at sidebar border, panel borders). Captured in PR-body via `/link` URL.
+- [ ] Manual smoke: page reload after picking Mist — edge stays cool-blue (validates `loadState()` re-derivation).
+- [ ] **FB-0027 symbol-grep:** `grep -n "pageTintEdge\|edgeFor" src/` shows only the intended consumers + the new shared module.
+- [ ] **FB-0027 literal-value grep:** `grep -nE "hsla\([0-9]+,\s*30%,\s*50%,\s*0\.10\)" src/` returns only `src/lib/tint.ts` (the canonical formula source) and `src/lib/tint.test.ts` (the byte-equivalence regression-guard test). Any other survivor is an unmigrated stale literal — fix before commit. This is the literal-value guard FB-0027 requires; the symbol grep above doesn't cover it.
+- [ ] Preflight green: `npm run typecheck && npm run build && npm run test`.
+- [ ] `/flow:critique-plan` ran and returned APPROVED (or CRITIQUE-with-applied-fixes). _Note: plan-critic agent ran at plan time via `assumption-auditor:plan-critic` because `Skill("flow:critique-plan")` doesn't resolve via the programmatic Skill tool — captured as plugin rough edge for flow follow-up PR per CLAUDE.md "Flow plugin (in-migration)" rule._
+- [ ] `/simplify` (bundled native) ran post-commit; any findings fixed in-tree.
+- [ ] `/flow:staff-review` ran with all 4 lenses spawning + producing output (not just spawning — output captured for each); BLOCKER + cheap NIT applied in-tree; FOLLOW-UPs routed to `core-docs/{plan,roadmap}.md`.
+- [ ] `/flow:ship` ran end-to-end: `/flow:security-review` + `/flow:accessibility-review` + feedback synthesis + doc updates + commit + push + PR open.
+- [ ] **Plugin-dogfood discipline (mechanical check):** `git log claude/pr5-flow-dogfood --grep "^/staff-review\\|^/security-review\\|^/accessibility-review\\|^/ship\\|^/critique-plan"` (without `flow:` prefix) shows zero commits across the entire PR — i.e., every workflow-skill invocation was the namespaced plugin version. Defends the dogfood claim with a mechanical grep instead of planner discipline alone (closes plan-critic FOLLOW-UP).
+
+**Confidence verdicts:**
+
+**Assumption A:** _(removed — prior MEDIUM-rated assumption about deferring `loadState()` migration was resolved by folding the 1-LOC re-derivation into Scope (in). No deferred-migration ambiguity left; the gate is closed by inclusion, not by user vote. Closes plan-critic BLOCKER 2.)_
+
+**Assumption B:** Auto-deriving `edge` from `tint` inside `setPageTint(tint, edge?)` is a non-breaking API change. The three callers that today don't pass an edge get a *correct* edge instead of the prior (stale) edge — a strict improvement; the one caller that does pass an edge continues to pass it explicitly.
+**Confidence:** HIGH
+**Why:** Examined all 4 call sites in `src/`. None rely on "previous edge sticks around" as intentional behavior — every site either passes an edge or expects the edge to follow the tint.
+**If it flips:** A future caller intentionally wants `setPageTint(newTint)` to keep the old edge — defensible (e.g., "lock the edge during a transition"). Trivial revert to explicit-only `edge`; restore the three preset callers to pass `edgeFromTint(color)`.
+
+**Assumption C:** The `hsl(...)` regex parse in `hueFromTint` covers all tint values the app produces today (presets + drag-derived + manual hex via preset color picker).
+**Confidence:** HIGH
+**Why:** Verified by grep: every `setPageTint` call site passes either an `hsl(...)` string from `colorFor()` (drag), a preset literal like `'hsl(30, 25%, 88.5%)'`, or a hex string from the color picker. The hex path is the only non-HSL input; `hueFromTint` returning null for hex triggers the documented fallback (today's hardcoded edge), which is no worse than today's behavior for hex.
+**If it flips:** Add a hex-to-HSL conversion step (`@radix-ui/colors` or a small custom converter; ~10 LOC). Not needed for v1 because hex inputs are user-typed and the fallback is acceptable.
+
+**Assumption D:** The `/flow:*` skills (critique-plan, staff-review, security-review, accessibility-review, ship) all work cleanly against this diff. Per PR 4's validation: yes for slot reads, lens orchestration, and ship pipeline against doc-only diffs; this is the first **code** diff to test them.
+**Confidence:** MEDIUM
+**Why:** PR 4 smoke-tested the plugin on its own (doc-config) diff. This PR is the first code diff. Edge cases (push-further lens on a small visual change, security-review on a new tint helper, a11y-review on hue-derived colors) may surface plugin rough edges. The `Skill("flow:critique-plan")` programmatic-tool failure I already hit at plan time is one such rough edge (worked around by invoking `assumption-auditor:plan-critic` directly — functionally equivalent; captured for flow follow-up).
+**If it flips:** **Pause PR 5; file a flow follow-up issue with the crash detail; do NOT fall back to local skills.** Local-skill fallback would defeat the dogfood validation (the whole point of PR 5 per the spec § Scope (out): "No invocation of md-manager's local workflow skills"). Resume PR 5 only after the flow fix lands and the plugin re-validates against this diff. _(Resolves plan-critic REDRIRECT: prior wording allowed fallback, which contradicted the dogfood Scope (out). Pause-and-fix-upstream is the only consistent posture.)_
+
+**Risks / open questions:**
+- **Plugin rough edges may surface mid-pipeline.** Capture to flow's `dev-docs/feedback.md` (separate PR per CLAUDE.md "Flow plugin (in-migration)" rule). Per revised Assumption D: PR 5 pauses for upstream fix rather than falling back to local skills, which would defeat dogfood validation. One plugin rough edge already captured at plan time: `Skill("flow:critique-plan")` doesn't resolve via programmatic Skill tool (worked around with direct `assumption-auditor:plan-critic` agent invocation).
+- **`edgeForHue` formula** matches the current `edgeFor(y)` exactly. If a future review wants per-hue alpha tuning (e.g., higher alpha for cool hues that look weaker), that's a roadmap item, not this PR.
+- **Contrast against `--page-tint`.** The 10% alpha black-equivalent overlay should remain visually subtle across all hue ranges; verified visually at PR 4 time for the existing Sand default. New per-hue edges may have different perceptual weight at certain hues — accessibility-review should catch this if any hue produces a contrast-failing surface border. Out-of-scope for this PR (the formula is unchanged); flag if surfaced.
+
+**Files touched (anticipated):**
+- **New:** `src/lib/tint.ts` (~15 LOC), `src/lib/tint.test.ts` (~30 LOC).
+- **Modified:** `src/store.tsx` (~5 LOC: `defaultState()` + `setPageTint` default arg), `src/components/ColorRail.tsx` (~5 LOC: import + replace local `edgeFor`).
+- **Unchanged:** every `.claude/` file, every `core-docs/` file (mid-feature; `/flow:ship` writes the docs at end), every other `src/` file.
+
+---
 
 ### Flow plugin extraction (current — multi-PR umbrella)
 

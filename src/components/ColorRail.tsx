@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
+import { edgeForHue } from '../lib/tint';
 import { PaletteIcon } from './icons';
 
 const HUE_STOPS = [
@@ -40,15 +41,10 @@ function hueAt(y: number): number {
   return HUE_STOPS[HUE_STOPS.length - 1].h;
 }
 
-function colorFor(y: number, intensity: number): string {
-  const h = hueAt(y);
+function colorFor(h: number, intensity: number): string {
   const s = 20 + intensity * 50;
   const l = 95 - intensity * 12;
   return `hsl(${h.toFixed(1)}, ${s.toFixed(1)}%, ${l.toFixed(1)}%)`;
-}
-
-function edgeFor(y: number): string {
-  return `hsla(${hueAt(y).toFixed(0)}, 30%, 50%, 0.10)`;
 }
 
 export function ColorRail() {
@@ -92,8 +88,9 @@ export function ColorRail() {
       const intensity = 1 - Math.min(1, leftOfStrip / 240);
       const next = { y, intensity };
       setStrip(next);
-      const c = colorFor(y, intensity);
-      setPageTint(c, edgeFor(y));
+      const h = hueAt(y);
+      const c = colorFor(h, intensity);
+      setPageTint(c, edgeForHue(h));
       setActivePreset(null);
       const ind = indicatorRef.current;
       if (ind) {
